@@ -1,0 +1,10 @@
+/build/
+/gateway
+/sensor_node
+/logFifo
+/gateway.log
+/sensor.db
+/sensor.db-*
+*.dSYM/
+.DS_Store
+__pycache__/
