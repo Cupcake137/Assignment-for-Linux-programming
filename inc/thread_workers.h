@@ -4,23 +4,20 @@
 #include <stdatomic.h>
 #include "sbuffer.h"
 
-/*
- * Global run flag:
- * - defined exactly once in thread_workers.c
- * - set to 0 when program should stop
- */
 extern atomic_int g_running;
+extern atomic_int g_failed;
 
-/*
- * Shared context passed to all worker threads.
- */
 typedef struct {
     sbuffer_t *buffer;
     int port;
+    const char *map_path;
+    const char *db_path;
 } gateway_ctx_t;
 
+/* Record a fatal error and wake blocked consumers. */
+void gateway_fail(gateway_ctx_t *ctx, const char *message);
 void *connection_manager_thread(void *arg);
 void *data_manager_thread(void *arg);
 void *storage_manager_thread(void *arg);
 
-#endif /* THREAD_WORKERS_H */
+#endif

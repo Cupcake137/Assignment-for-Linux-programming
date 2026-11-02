@@ -1,15 +1,10 @@
 #ifndef LOGGING_H
 #define LOGGING_H
 
-/*
- * Logging module used by the main process and its worker threads.
- *
- * Flow:
- *   log_event(...) -> FIFO -> logger process -> gateway.log
- */
-
-void log_init(void);
-void log_event(const char *fmt, ...);
+/* Thread-safe FIFO writer. -1 means failure, 0 means success. */
+int log_init(void);
+int log_event(const char *fmt, ...);
 void log_close(void);
+int log_failed(void);
 
-#endif /* LOGGING_H */
+#endif
