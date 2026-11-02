@@ -1,54 +1,56 @@
-# Testing
+# Validation reference
 
-Run from the repository root:
+## Test execution
 
-```sh
-make test
-make sanitize
-```
-
-Tests require localhost TCP access. The Python suite creates isolated temporary
-working directories and does not change your root log or database. Retry and idle
-cases take about one minute in total. The test runner applies timeouts and kills
-its process group if a test fails to avoid leaving logger children running.
-
-## Automated coverage
-
-| Area | Check |
+| Command | Coverage |
 |---|---|
-| Buffer | 2,000 readings, independent readers, delayed storage, read-before-ack, ordered drain, invalid role, insert after close |
-| Parser | Valid text/CRLF, bounds, overflow, trailing garbage, NaN/infinity, map validation |
-| TCP | Five simultaneous sensors, fragmented/coalesced lines, oversized/partial input, ID switch |
-| Simulator | Compiled C sender interoperates with gateway |
-| Analysis | Full-window warm-up, rolling replacement, exact threshold boundaries, hot/cold alerts, room IDs |
-| Logging | Sequence numbering and shutdown event |
-| Persistence | 509 rows before restart; 510 after one additional reading |
-| Retry | Database unavailable at startup then recovers without losing pending data |
-| Failure | Three initialization failures stop the gateway |
-| Insert | SQLite triggers inject transient and persistent write failures |
-| Configuration | Duplicate map entries stop startup |
-| Lifecycle | SIGTERM with an idle partial-line connection; receive idle timeout |
+| `make test` | C unit tests and Python integration suite |
+| `make sanitize` | Clean rebuild and the same suite under ASan/UBSan |
 
-These are functional checks, not throughput benchmarks. ASan/UBSan can detect
-many memory and undefined-behavior defects but do not prove race freedom.
-Valgrind/ThreadSanitizer and exhaustive resource-failure tests are not included.
+The suite requires Python 3.8+, SQLite, and localhost TCP access. Integration cases
+use temporary working directories and isolated process groups. Database retries
+and the idle-timeout case intentionally wait; a full run takes about one minute.
+Timeout cleanup prevents failed cases from leaving logger processes behind.
 
-## Known limitations
+Sanitizer and debug targets clean before rebuilding. Make does not track arbitrary
+compiler-flag changes; restore the default mode with `make clean` and `make`.
+Build modes must not run concurrently in one checkout.
 
-The shared buffer has no capacity limit or disk-backed recovery. Reads scan from
-the head, so a lagging consumer can increase memory use and search cost. The poll
-array is rebuilt each iteration. No strict mutex fairness guarantee is claimed.
-The service is intended for local simulated sensors and has no authentication,
-TLS, deduplication, configuration reload, or database schema migration.
+## Coverage
 
-Linux CI is defined in `.github/workflows/test.yml`. Validation results should be
-checked on the actual workflow run; a workflow definition alone is not evidence
-of a successful Linux run. Local test results are recorded in the pull request.
+| Area | Verification |
+|---|---|
+| Buffer | 2,000 ordered readings, independent consumers, delayed storage, read-before-ack, close/drain, invalid roles |
+| Parser | Valid LF/CRLF records, numeric ranges, overflow, extra fields, non-finite input, mapping syntax |
+| Connections | Five simultaneous senders, fragmented/coalesced lines, oversized/partial records, ID changes |
+| Simulator | C sender interoperability with the gateway |
+| Analysis | Window warm-up, rolling replacement, strict boundaries, room IDs, hot/cold events |
+| Logging | Sequential numbering and shutdown events |
+| Persistence | 509 rows before restart and 510 after one additional reading |
+| Startup recovery | Database becomes available while readings remain pending |
+| Failure limits | Three unsuccessful database initialization attempts terminate the service |
+| Insert recovery | SQLite triggers inject transient and permanent write failures |
+| Configuration | Duplicate mapping entries reject startup |
+| Lifecycle | SIGTERM with a connected idle client and incomplete input; receive idle timeout |
 
-## Local validation
+Counts are functional expectations, not throughput measurements. The suite does
+not benchmark sustained load or demonstrate race freedom under every schedule.
 
-On 2026-11-02, the regular `make test` and `make sanitize` suites passed on
-macOS arm64 with Apple Clang 21. Both C unit tests and all eight integration
-scenarios completed successfully. No ASan/UBSan diagnostics were reported.
-`git diff --check`, documentation link checks, and English text checks passed.
-Linux results are tracked separately in the pull request's workflow runs.
+## Verified environments
+
+On 2026-11-02, regular and sanitizer suites passed in both environments:
+
+- macOS arm64 with Apple Clang 21 and system SQLite.
+- Ubuntu through GitHub Actions, using the system C compiler and SQLite package.
+
+[Verified Ubuntu run](https://github.com/Cupcake137/Assignment-for-Linux-programming/actions/runs/41458585103)
+
+No ASan/UBSan findings were reported. Documentation links, English text, and
+`git diff --check` were also validated. Current branch checks are published by
+[the CI workflow](https://github.com/Cupcake137/Assignment-for-Linux-programming/actions/workflows/test.yml).
+
+## Validation boundaries
+
+Valgrind and ThreadSanitizer have not been run. Full disks, memory exhaustion,
+logger hangs, every SQLite error code, and sustained saturation are not exhaustively
+tested. ASan/UBSan success is not a proof of race freedom or complete correctness.

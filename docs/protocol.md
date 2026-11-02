@@ -21,8 +21,8 @@ share analysis state; simulators should use unique IDs. Unknown positive IDs are
 logged during analysis but still stored as raw readings.
 
 A successful TCP send is not an application-level storage acknowledgment.
-There is no encryption or authentication. The format is this repository's original
-text interface; compatibility with an external lab's binary protocol is unverified.
+Transport is unencrypted and unauthenticated. This text format is the gateway's
+application protocol; no alternate binary codec or protocol negotiation is provided.
 
 ## SQLite
 

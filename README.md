@@ -1,162 +1,148 @@
 # Linux Sensor Gateway
 
-A small C application that receives temperature readings over TCP, calculates
-per-sensor rolling averages, stores raw readings in SQLite, and writes events
-through a separate logging process.
+[![Build and test](https://github.com/Cupcake137/Assignment-for-Linux-programming/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/Cupcake137/Assignment-for-Linux-programming/actions/workflows/test.yml)
 
-The project keeps the original `inc/` and `src/` layout and uses functions,
-structs, linked lists, pthreads, and POSIX system calls. Sensors are simulated.
+A multithreaded temperature monitoring service built with C11 and POSIX APIs.
+The gateway ingests concurrent TCP sensor streams, evaluates rolling temperature
+averages, persists raw measurements to SQLite, and records events through a
+separate logging process. A sensor simulator supports repeatable local workloads.
+
+**Stack:** C11, POSIX threads, TCP sockets, `poll()`, `fork()`, named FIFO, SQLite, Make.
+
+## Capabilities
+
+- Concurrent sensor connections with per-client record assembly and idle timeouts.
+- One shared buffer with independent analysis and storage acknowledgments.
+- Per-sensor rolling averages, room mapping, and hot/cold events.
+- SQLite prepared inserts, persistent records, and bounded retry attempts.
+- Serialized FIFO events and a dedicated logger process.
+- Coordinated SIGINT/SIGTERM shutdown and resource cleanup.
+- Unit tests, failure-injection integration tests, and Ubuntu sanitizer CI.
+
+## Architecture
+
+```text
+Sensor simulators --TCP--> Connection manager --> Shared buffer
+                                                   |       |
+                                            Data manager  Storage manager
+                                            averages/alerts   SQLite
+
+Main and worker threads --FIFO--> Logger process --> gateway.log
+```
+
+The gateway process contains main plus three worker threads. Buffer entries remain
+allocated until both consumers acknowledge completion. Storage acknowledges only
+after the database insert succeeds. The logger is forked before workers start.
+
+[Architecture reference](docs/architecture.md)
 
 ## Build
 
-Requirements: a C11 compiler, Make, SQLite development headers, and Python 3.8+
-for integration tests. The SQLite CLI is optional for inspecting the database.
+Dependencies: C11 compiler, Make, SQLite development files. Python 3.8+ is required
+for integration tests; the SQLite CLI is optional for database inspection.
 
-On Ubuntu/Debian:
+Ubuntu/Debian:
 
 ```sh
 sudo apt install build-essential libsqlite3-dev sqlite3 python3
 make
 ```
 
-On macOS, install Command Line Tools and provide SQLite headers/library, then run
-`make`. Run all commands below from the project root.
+The project is also validated on macOS with Apple Clang and SQLite. Commands below
+use the project root as the working directory.
 
-## Run
+## Usage
 
-Terminal 1:
+```text
+gateway PORT [MAP_PATH DB_PATH]
+sensor_node IP PORT SENSOR_ID TEMPERATURE COUNT INTERVAL_MS
+```
+
+Start the gateway:
 
 ```sh
 ./gateway 6543
 ```
 
-Terminal 2:
+Send ten readings of 30 degrees Celsius, 200 ms apart, from another terminal:
 
 ```sh
-# IP, port, sensor ID, temperature, number of readings, interval in milliseconds
 ./sensor_node 127.0.0.1 6543 20 30 10 200
 ```
 
-Terminal 3, optionally:
-
-```sh
-./sensor_node 127.0.0.1 6543 50 10 10 200
-```
-
-Sensor 20 maps to room 602 and sensor 50 maps to room 905. After five samples,
-30 degrees Celsius produces a hot alert; 10 degrees produces a cold alert.
-The simulator sends real TCP traffic; SQLite and FIFO logging are also real.
+The sample mapping associates sensor 20 with room 602. After five readings, its
+average exceeds the hot threshold and generates an event.
 
 ```sh
 cat gateway.log
 sqlite3 sensor.db 'SELECT sensor_id, temperature, timestamp FROM sensor_data ORDER BY id;'
 ```
 
-Stop the gateway with Ctrl+C or SIGTERM. Accepted complete readings drain during
-normal shutdown. A partial record not yet accepted can be discarded.
-
-Custom paths are supplied together:
+Custom map and database paths must be supplied together:
 
 ```sh
 ./gateway 6543 config/room_sensor.map demo.db
 ```
 
 The gateway binds to `127.0.0.1`. Run one instance per working directory because
-`logFifo` and `gateway.log` have fixed paths. Each run replaces the log; existing
-database rows are preserved. `make clean` retains logs and databases.
-
-## Data flow
-
-```text
-sensor_node -> TCP connection manager -> one shared buffer
-                                         |           |
-                                  data manager   storage manager
-                                  averages/logs     SQLite
-
-main and worker threads -> logFifo -> logger child -> gateway.log
-```
-
-The main process has main plus three worker threads. The logger is forked before
-worker creation. Each buffered reading is acknowledged independently by analysis
-and storage, and is freed only after both complete. Storage acknowledges after a
-successful insert, not when it merely reads a copy.
-
-## Text protocol
-
-One newline-terminated reading per record:
-
-```text
-20 21.5 1700000000
-```
-
-Fields are sensor ID, temperature in degrees Celsius, and Unix timestamp in seconds.
-This preserves the original repository's text interface. Multiple records can arrive
-together or in fragments. See [protocol](docs/protocol.md) for validation rules.
+FIFO and log paths are fixed. Startup replaces the log and preserves existing
+database rows. SIGINT or SIGTERM stops ingestion and drains accepted readings
+during normal shutdown.
 
 ## Configuration
 
-`config/room_sensor.map` contains `ROOM_ID SENSOR_ID` pairs, one per line.
-Each room and sensor must appear only once. No headers, comments, or blank lines.
-
-Defaults in `inc/common.h`:
+`config/room_sensor.map` contains unique `ROOM_ID SENSOR_ID` pairs, one per line.
+Settings are defined in `inc/common.h` and take effect after rebuilding.
 
 | Setting | Default |
 |---|---:|
-| Average window | 5 readings per sensor |
+| Rolling window | 5 readings per sensor |
 | Cold threshold | Below 18.0 degrees Celsius |
 | Hot threshold | Above 26.0 degrees Celsius |
-| SQLite attempts | 3 |
+| SQLite attempt limit | 3 |
 | Retry delay | 5 seconds |
 | Client idle timeout | 10 seconds |
 
-Alerts start after a full window. Every subsequent out-of-range average generates
-an event; boundary values do not trigger an alert. Unknown positive sensor IDs
-produce a diagnostic but remain stored as raw readings.
+Alerts require a full window and use strict threshold comparisons. Every later
+out-of-range average emits an event. Unknown positive sensor IDs are logged while
+their valid raw readings remain eligible for storage.
 
-## Test and debug
+[Protocol, configuration, and persistence reference](docs/protocol.md)
+
+## Validation
 
 ```sh
-make test
-make debug
-make sanitize
+make test       # Unit and integration tests
+make sanitize   # Rebuild and test with AddressSanitizer/UndefinedBehaviorSanitizer
+make debug      # Rebuild with per-measurement logging
+make clean      # Remove build output; retain database and logs
 ```
 
-`make test` runs C unit tests and Python integration tests on localhost. Retry and
-idle-timeout cases intentionally wait; the suite usually takes about one minute.
-`make debug` adds per-reading logs. `make sanitize` rebuilds and tests with ASan/UBSan.
-After changing build modes, use `make clean` then `make` to restore the default.
-Do not run different build modes concurrently in the same checkout.
+Regular and sanitizer suites have passed on Ubuntu CI and macOS. Coverage includes
+concurrent clients, fragmented records, rolling-average boundaries, restart
+persistence, transient/permanent database failures, and idle-client shutdown.
 
-## Files
+[Coverage and validation details](docs/testing.md)
+
+## Repository layout
 
 ```text
-inc/                     Public headers and settings
-src/main.c               Startup, signals, thread joins, logger cleanup
-src/thread_workers.c     Shared run/failure flags and fatal-error helper
-src/connection_manager.c TCP clients and text framing
-src/data_manager.c       Room map, rolling averages, alerts
-src/storage_manager.c    SQLite inserts and retry policy
-src/sbuffer.c            One buffer with two consumer acknowledgments
-src/logging.c            Thread-safe FIFO writer
-src/logger_proc.c        Child process writing numbered log entries
-src/protocol.c           Text validation
-src/sensor_node.c        Standalone sensor simulator
-config/                  Sample room mapping
-tests/                   Unit and integration tests
-docs/                    Module walkthrough, protocol, and validation notes
+inc/        Public interfaces and compile-time settings
+src/        Gateway modules and sensor simulator
+config/     Sample room-to-sensor mapping
+tests/      C unit tests and Python integration tests
+docs/       Architecture, protocol, and validation references
+.github/    Ubuntu CI workflow
+Makefile    Build, debug, test, and sanitizer targets
 ```
 
-## Documentation and scope
+Generated executables, object files, logs, FIFO, and database files are excluded
+from version control.
 
-- [Module walkthrough and changes from the original code](docs/modules.md)
-- [Protocol and storage behavior](docs/protocol.md)
-- [Testing and limitations](docs/testing.md)
+## Operational limits
 
-The software implements the gateway features described by the assignment. The
-unprovided lab specifications cannot be used to verify exact wire/API compatibility;
-this repository explicitly uses its original text protocol and the settings above.
-No paper exercises are included.
-
-Pending readings live only in an unbounded in-memory buffer. There is no crash
-recovery, TLS, authentication, deduplication, or schema migration. This is a small
-local project, not a production telemetry service.
+The buffer is unbounded and memory-only: pending readings are not recovered after
+a crash. The protocol has no authentication, encryption, or storage acknowledgment.
+There is no deduplication, schema migration, alert suppression, or configuration
+reload. Blocking logger I/O can stall workers. These constraints define the
+current scope of the service.
